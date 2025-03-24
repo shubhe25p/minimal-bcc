@@ -2,25 +2,25 @@
 
 ## Distribution: OpenSUSE Leap 15.6
 
-Reason for OpenSUSE was because of some strange segfaults and binary stripping in Ubuntu Jammy 22.04 both with apt package manager and manual install. (See Issue: https://github.com/bpftrace/bpftrace/issues/954)
+The reason for choosing OpenSUSE is due to strange segfaults and binary stripping issues in Ubuntu Jammy 22.04, both with the apt package manager and manual installation. (See Issue: https://github.com/bpftrace/bpftrace/issues/954)
 
-## Running the code on OpenSUSE
+## Running the Code on OpenSUSE
 
-- Environment should have python3 installed
-- Next step is setting up bcc. For openSUSE Leap 42.2 (and later) and Tumbleweed, bcc is already included in the official repo. Just install the packages with zypper.
-```
-sudo zypper ref
-sudo zypper in bcc-tools bcc-examples
-```
-- running fs-latency.py, this file will track latency on all read latency on all filesystems
+- Ensure Python3 is installed.
+- Set up BCC. For OpenSUSE Leap 42.2 (and later) and Tumbleweed, BCC is included in the official repository. Install the packages with zypper:
+  ```sh
+  sudo zypper ref
+  sudo zypper in bcc-tools bcc-examples
+  ```
+  
+To run fs-latency.py, which tracks read latency on all filesystems:
 ```
 sudo python3 fs-latency.py
 ```
-- similarly for running vfs-count.py, this bcc code will track the count of vfs read write open and link and unlink requets per second 
+To run vfs-count.py, which tracks the count of VFS read, write, open, link, and unlink requests per second:
 ```
 sudo python3 vfs-count.py
 ```
--- If you run and get an error saying that something like kernel headers not found it is because The default installation command installs kernel headers at a weird place and not in /lib/modules/$(uname -r), thus bcc might break. Manually copy the folders from the wrong folder (also in /lib/modules/) to the right one, it works
+If you encounter an error indicating that kernel headers are not found, it may be because the default installation command places kernel headers in an unusual location rather than in /lib/modules/$(uname -r). Manually copy the folders from the incorrect location (also in /lib/modules/) to the correct one to resolve this issue.
 
-let me know if you still have any error.
-
+Let me know if you encounter any errors.
