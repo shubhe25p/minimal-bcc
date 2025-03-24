@@ -21,6 +21,6 @@ The reason for choosing OpenSUSE is due to strange segfaults and binary strippin
   ```
   sudo python3 vfs-count.py
   ```
-- If you encounter an error indicating that kernel headers are not found, it may be because the default installation command places kernel headers in an unusual location rather than in /lib/modules/$(uname -r). Manually copy the folders from the incorrect location (also in /lib/modules/) to the correct one to resolve this issue.
+- If you encounter an error while running the code above indicating that kernel headers are not found, it may be because the default installation command places kernel headers in an unusual location rather than in /lib/modules/$(uname -r) which is where BCC will search. Manually copy the folders from the incorrect location (also in /lib/modules/) to the correct one to resolve this issue.
 
 Let me know if you encounter any errors.
