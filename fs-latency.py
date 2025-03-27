@@ -13,6 +13,7 @@
 # 31-Mar-2022   Rocky Xing      Added disk filter support.
 # 01-Aug-2023   Jerome Marchand Added support for block tracepoints
 # 12-Nov-2024   Shubh Pachchigar Add FS VFS calls latency
+# 27-Mar-2025   Shubh Pachchigar use fd table to get FS info
 
 from __future__ import print_function
 from bcc import BPF
@@ -30,7 +31,8 @@ bpf_text = """
 #include <linux/sched.h>
 #include <linux/mount.h>
 #include <linux/path.h>
-#include <linux/fs_struct.h>
+#include <linux/fdtable.h>
+#include <linux/fs.h>
 #include <linux/dcache.h>
 
 struct fs_key {
@@ -39,12 +41,13 @@ struct fs_key {
 };
 
 struct fd_info {
-    u64 pid_tgid;
+    u32 pid;
     unsigned int fd;
 };
 
 BPF_HASH(read_start, struct fs_key);
 BPF_HASH(fs_latency_hist, struct fs_key, u64);
+BPF_HASH(pid_fd_cache, u32, unsigned int);
 BPF_HASH(fd_fs_cache, struct fd_info, struct fs_key);
 
 TRACEPOINT_PROBE(syscalls, sys_enter_read)
@@ -52,14 +55,15 @@ TRACEPOINT_PROBE(syscalls, sys_enter_read)
     char fsname[32];
     struct fs_key key = {};
     struct fd_info info = {};
-    info.pid_tgid = bpf_get_current_pid_tgid();
+    info.pid = bpf_get_current_pid_tgid();
     info.fd = args->fd;
+    pid_fd_cache.update(&info.pid, &info.fd);
     struct fs_key *cached_key = fd_fs_cache.lookup(&info);
     if(cached_key == NULL)
     {
         // Get current task_struct
         struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-        const unsigned char *fs_name = task->fs->pwd.mnt->mnt_root->d_name.name;
+        const unsigned char *fs_name = task->files->fdt->fd[args->fd]->f_inode->i_sb->s_type->name;
         bpf_probe_read_kernel_str(&key.fsname, sizeof(key.fsname), fs_name);
         fd_fs_cache.update(&info, &key);
         u64 ts = bpf_ktime_get_ns();
@@ -78,13 +82,18 @@ TRACEPOINT_PROBE(syscalls, sys_exit_read) {
     u64 *start_ts, latency;
     u64 zero = 0, *count;
     struct fs_key key = {};
+    struct fd_info info = {};
+    info.pid = bpf_get_current_pid_tgid();
+    unsigned int* fdptr = pid_fd_cache.lookup(&info.pid);
+    if(fdptr==NULL)
+        return 0;
+    info.fd = *fdptr;
+    struct fs_key *cached_key = fd_fs_cache.lookup(&info);
+    if(cached_key==NULL)
+        return 0;
     
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-    const unsigned char *fs_name = task->fs->pwd.mnt->mnt_root->d_name.name;
-    bpf_probe_read_kernel_str(&key.fsname, sizeof(key.fsname), fs_name);
-   
     // fetch timestamp and calculate delta
-    start_ts = read_start.lookup(&key);
+    start_ts = read_start.lookup(cached_key);
     if (start_ts == 0) {
         return 0;   // missed issue
     }
@@ -92,11 +101,11 @@ TRACEPOINT_PROBE(syscalls, sys_exit_read) {
 
     latency /= 1000;  // convert to microseconds
     
-    key.bucket = bpf_log2l(latency);
+    cached_key->bucket = bpf_log2l(latency);
 
-    count = fs_latency_hist.lookup_or_init(&key, &zero);
+    count = fs_latency_hist.lookup_or_init(cached_key, &zero);
     (*count)++;
-    read_start.delete(&key);
+    read_start.delete(cached_key);
     return 0;
 }
 """
