@@ -86,7 +86,7 @@ static int trace_rw_entry(struct pt_regs *ctx, struct file *file,
     fs_info.sz=count;
 
     // grab file system type
-    const char* fstype_name = file->f_inode->i_sb->s_type->name;
+    const char* fstype_name = file->f_inode->i_sb->s_id;
     bpf_probe_read_kernel(&fs_info.fstype, sizeof(fs_info.fstype), fstype_name);
 
     // grab file name
