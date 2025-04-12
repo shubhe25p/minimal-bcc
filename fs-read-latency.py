@@ -5,9 +5,9 @@ from collections import defaultdict
 import argparse
 
 examples = """examples:
-    ./fs_read_latency             # trace sync file I/O per filesystem (default)
-    ./fs_read_latency -n ior      # trace processes named 'ior'
-    ./fs_read_latency -p 42       # trace PID 42 only
+    ./fs-read-latency             # trace sync file I/O per filesystem (default)
+    ./fs-read-latency -n ior      # trace processes named 'ior'
+    ./fs-read-latency -p 42       # trace PID 42 only
 """
 parser = argparse.ArgumentParser(
     description="Trace sync file I/O synchronous file reads per FS",
@@ -45,12 +45,14 @@ bpf_text = """
 #include <linux/mount.h>
 
 struct fs_stat_t {
-    u32 pid;
-    u32 sz;
     u64 bucket;
     u64 ts;
     u64 delta_us;
-    char fstype[32];
+    u64 throughput;
+    u32 pid;
+    u32 sz;
+    char fstype[16]; /* arbitrary choice for file system type, no fs would have this greater than 16 chars */
+    char msrc[16];   /* arbitrary choice for mount-source, makes no sense */
     char name[DNAME_INLINE_LEN];
     char comm[TASK_COMM_LEN];
 };
@@ -89,6 +91,10 @@ static int trace_rw_entry(struct pt_regs *ctx, struct file *file,
     const char* fstype_name = file->f_inode->i_sb->s_type->name;
     bpf_probe_read_kernel(&fs_info.fstype, sizeof(fs_info.fstype), fstype_name);
 
+    // grab filesystem mount point
+    const char* msrc = file->f_inode->i_sb->s_id;
+    bpf_probe_read_kernel(&fs_info.msrc, sizeof(fs_info.msrc), msrc);
+    
     // grab file name
     struct qstr d_name = de->d_name;
     bpf_probe_read_kernel(&fs_info.name, sizeof(fs_info.name), d_name.name);
@@ -121,6 +127,7 @@ int trace_read_return(struct pt_regs *ctx)
     latency /= 1000;  // convert to microseconds
     fs_info->bucket = bpf_log2l(latency);
     fs_info->delta_us = latency;
+    fs_info->throughput = (fs_info->sz/latency);
     count = fs_latency_hist.lookup_or_init(fs_info, &zero);
     (*count)++;
     read_start.delete(&pid);
@@ -187,21 +194,22 @@ signal.signal(signal.SIGINT, signal_ignore)
 # Wait until Ctrl+C
 signal.pause()
 
-# Print the histogram
-print("\nHistogram of latency requested in read() calls per fs:")
-
 histogram = b.get_table("fs_latency_hist")
+msrc_fstype_map ={}
 
 fs_hist = defaultdict(lambda: defaultdict(int))
 
 for k, v in histogram.items():
-    fsname = k.fstype
+    fstype = k.fstype
+    msrc = k.msrc
     bucket = k.bucket
     count = v.value
-    fs_hist[fsname][bucket] += count
+    fs_hist[msrc][bucket] += count
+    if msrc not in msrc_fstype_map:
+        msrc_fstype_map[msrc] = fstype
 
-for fs, buckets in fs_hist.items():
-    print(f"\nFile System {fs}:")
+for msrc, buckets in fs_hist.items():
+    print(f"\n {msrc}:{msrc_fstype_map[msrc]}")
 
 
     total_count = sum(buckets.values())
