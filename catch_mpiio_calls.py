@@ -5,6 +5,7 @@ from time import sleep
 import argparse
 import os
 from pathlib import Path
+import signal
 
 def valid_library_path(value):
     """Validates if the provided path exists and is a file"""
@@ -66,11 +67,13 @@ b.attach_uprobe(name=args.libmpi, sym="MPI_File_open", fn_name="count")
 
 print("Tracing MPIIO open calls()... Hit Ctrl-C to end.")
 
-# sleep until Ctrl-C
-try:
-    sleep(99999999)
-except KeyboardInterrupt:
-    pass
+ def signal_ignore(signal, frame):
+     print()
+ 
+ signal.signal(signal.SIGINT, signal_ignore)
+ 
+ # Wait until Ctrl+C
+ signal.pause()
 
 # print output
 print("%10s %5s %15s" % ("COUNT", "Testfile-name", "fdmode"))
