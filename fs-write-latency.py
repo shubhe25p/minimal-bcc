@@ -244,7 +244,7 @@ msrc_fstype_map ={}
 
 for k, v in histogram.items():
     fstype = k.fstype
-    msrc = k.msrc
+    msrc = k.mountpoint
     bucket = k.bucket
     count = v.value
     fs_hist[msrc][bucket] += count
