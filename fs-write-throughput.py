@@ -4,12 +4,12 @@ from collections import defaultdict
 import argparse
 
 examples = """examples:
-    ./fs-write-throughput             # trace sync file I/O per filesystem (default)
-    ./fs-write-throughput -n ior      # trace processes named 'ior'
-    ./fs-write-throughput -p 42       # trace PID 42 only
+    ./fs-write-latency             # trace sync file I/O per filesystem (default)
+    ./fs-write-latency -n ior      # trace processes named 'ior'
+    ./fs-write-latency -p 42       # trace PID 42 only
 """
 parser = argparse.ArgumentParser(
-    description="Trace sync file I/O synchronous file write throughput per microsecond",
+    description="Trace sync file I/O synchronous file write per FS",
     formatter_class=argparse.RawDescriptionHelpFormatter,
     epilog=examples)
 parser.add_argument("-p", "--pid", type=int, metavar="PID", dest="tgid",
@@ -43,6 +43,31 @@ bpf_text = """
 #include <linux/dcache.h>
 #include <linux/mount.h>
 
+struct mount {
+	struct hlist_node mnt_hash;
+	struct mount *mnt_parent;
+	struct dentry *mnt_mountpoint;
+	struct vfsmount mnt;
+    int mnt_id;
+};
+
+struct mountpoint {
+	struct hlist_node m_hash;
+	struct dentry *m_dentry;
+	struct hlist_head m_list;
+	int m_count;
+};
+
+#ifndef offsetof
+#define offsetof(TYPE, MEMBER)  ((size_t)&((TYPE *)0)->MEMBER)
+#endif
+
+#ifndef containerof
+#define containerof(ptr, type, member) ({                      \
+    const typeof( ((type *)0)->member ) *__mptr = (ptr);    \
+    (type *)( (char *)__mptr - offsetof(type,member) );})
+#endif
+
 struct fs_stat_t {
     u64 bucket;
     u64 ts;
@@ -50,7 +75,11 @@ struct fs_stat_t {
     u64 throughput;
     u32 pid;
     u32 sz;
-    char fstype[32];
+    int mnt_id;
+    char fstype[16];
+    char msrc[16];
+    char str1[16];
+    char mountpoint[DNAME_INLINE_LEN];
     char name[DNAME_INLINE_LEN];
     char comm[TASK_COMM_LEN];
 };
@@ -89,10 +118,27 @@ static int trace_rw_entry(struct pt_regs *ctx, struct file *file,
     const char* fstype_name = file->f_inode->i_sb->s_type->name;
     bpf_probe_read_kernel(&fs_info.fstype, sizeof(fs_info.fstype), fstype_name);
 
+    // grab filesystem mount point
+    const char* msrc = file->f_inode->i_sb->s_id;
+    bpf_probe_read_kernel(&fs_info.msrc, sizeof(fs_info.msrc), msrc);
+
     // grab file name
     struct qstr d_name = de->d_name;
     bpf_probe_read_kernel(&fs_info.name, sizeof(fs_info.name), d_name.name);
-    
+
+    de = file->f_inode->i_sb->s_root;
+    bpf_probe_read_kernel(&fs_info.str1, sizeof(fs_info.str1), de->d_name.name);
+
+    struct path p = file->f_path;
+    struct vfsmount *vmnt;
+    bpf_probe_read_kernel(&vmnt, sizeof(vmnt), &p.mnt);
+    struct mount *real_mnt = containerof(vmnt, struct mount, mnt);
+    bpf_probe_read_kernel(&fs_info.mnt_id, sizeof(fs_info.mnt_id), &real_mnt->mnt_id);
+    struct dentry *m_mp;
+    bpf_probe_read_kernel(&m_mp, sizeof(m_mp), &real_mnt->mnt_mountpoint);
+    struct qstr m_dname;
+    bpf_probe_read_kernel(&m_dname, sizeof(m_dname), &m_mp->d_name);
+    bpf_probe_read_kernel(&fs_info.mountpoint, sizeof(fs_info.mountpoint), m_dname.name);
 
     fs_info.ts = bpf_ktime_get_ns();
     write_start.update(&pid, &fs_info);
@@ -157,7 +203,7 @@ except Exception:
 print("Tracing FileSystem I/O... Hit Ctrl-C to end.")
 
 
-print("\nHistogram of write throughput calls per micro second:")
+print("\nHistogram of latency requested in write() calls per fs:")
 
 
 # print("%-8s %-14s %-6s %1s %-7s %7s %s" % ("TIME(s)", "COMM", "TID", "FSTYPE",
@@ -194,15 +240,19 @@ signal.pause()
 histogram = b.get_table("fs_latency_hist")
 
 fs_hist = defaultdict(lambda: defaultdict(int))
+msrc_fstype_map ={}
 
 for k, v in histogram.items():
-    fsname = k.fstype
+    fstype = k.fstype
+    msrc = k.mountpoint
     bucket = k.bucket
     count = v.value
-    fs_hist[fsname][bucket] += count
-
-for fs, buckets in fs_hist.items():
-    print(f"\nFile System {fs}:")
+    fs_hist[msrc][bucket] += count
+    if msrc not in msrc_fstype_map:
+        msrc_fstype_map[msrc]=fstype
+        
+for msrc, buckets in fs_hist.items():
+    print(f"\n {msrc}:{msrc_fstype_map[msrc]}")
 
 
     total_count = sum(buckets.values())
@@ -213,7 +263,7 @@ for fs, buckets in fs_hist.items():
     max_bucket = max(buckets.keys())
     
     # Print the histogram header
-    print("       bytes/usec      : count     distribution")
+    print("       bytes/usecs      : count     distribution")
 
     # Calculate the maximum count for scaling the histogram bars
     max_count = max(buckets.values())
